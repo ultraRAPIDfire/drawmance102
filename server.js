@@ -11,7 +11,7 @@ const io = new Server(server, {
 const port = process.env.PORT || 3000;
 
 const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
-const waitingQueue = []; // { socket, username }
+const waitingQueue = []; // [{ socket, username }]
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -21,6 +21,7 @@ io.on('connection', (socket) => {
 
   socket.on('username', (name) => {
     username = name;
+    console.log(`Username set: ${username}`);
   });
 
   socket.on('joinRoom', (room) => {
@@ -39,7 +40,6 @@ io.on('connection', (socket) => {
     roomsUsers[room][socket.id] = username || 'Anonymous';
 
     io.to(room).emit('activeUsers', Object.keys(roomsUsers[room]).length);
-
     console.log(`${username || 'User'} joined room ${room}`);
   });
 
@@ -51,12 +51,16 @@ io.on('connection', (socket) => {
     if (currentRoom) io.to(currentRoom).emit('chat', data);
   });
 
-  // 🚀 Matchmaking logic
-  socket.on('findPartner', () => {
+  // 🔁 Matchmaking logic
+  socket.on('findPartner', (name) => {
+    username = name || username;
     if (!username) {
       socket.emit('error', 'Username not set');
       return;
     }
+
+    // Prevent duplicate in queue
+    if (waitingQueue.find(u => u.socket.id === socket.id)) return;
 
     const partner = waitingQueue.find(user => user.socket.id !== socket.id);
 
