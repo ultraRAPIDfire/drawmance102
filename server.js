@@ -36,10 +36,31 @@ io.on('connection', (socket) => {
     emitActiveUsers(room);
 
     console.log(`${username || 'User'} joined room ${room}`);
+
+    // *** IMPORTANT: If you had persistent canvas state, you'd load it here ***
+    // For example, if you stored the last full canvas image or a list of recent strokes.
+    // Since get_stroke.php provides past strokes, you'd fetch them here and emit to the joining user.
+    // However, a 'clear all' in the past would ideally clear these too.
+    // For now, new users will see a blank canvas unless the clear command was recent.
   });
 
   socket.on('draw', (data) => {
     if (currentRoom) socket.to(currentRoom).emit('draw', data);
+  });
+
+  // New: Handle drawText event
+  socket.on('drawText', (data) => {
+    if (currentRoom) socket.to(currentRoom).emit('drawText', data);
+  });
+
+  // New: Handle clearCanvas event
+  socket.on('clearCanvas', (room) => {
+    if (room && roomsUsers[room]) {
+      console.log(`Clearing canvas for room: ${room}`);
+      io.to(room).emit('clearCanvas'); // Broadcast to all clients in the room
+      // If you had persistent storage, you'd also mark the canvas as cleared in your database here.
+      // e.g., updateRoomState(room, 'cleared');
+    }
   });
 
   socket.on('chat', (data) => {
