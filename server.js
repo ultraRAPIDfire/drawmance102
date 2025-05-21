@@ -71,8 +71,20 @@ io.on('connection', (socket) => {
       const room = generateRoomCode();
 
       [partner.socket, socket].forEach(s => {
+        // Leave previous room if any
+        if (currentRoom) {
+          s.leave(currentRoom);
+        }
+
+        // Remove from any old roomsUsers
+        for (const r in roomsUsers) {
+          if (roomsUsers[r] && roomsUsers[r][s.id]) {
+            delete roomsUsers[r][s.id];
+            io.to(r).emit('activeUsers', Object.keys(roomsUsers[r]).length);
+          }
+        }
+
         s.join(room);
-        s.emit('partnerFound', { room, partner: s === socket ? partner.username : username });
       });
 
       currentRoom = room;
@@ -81,7 +93,12 @@ io.on('connection', (socket) => {
       roomsUsers[room][partner.socket.id] = partner.username;
 
       io.to(room).emit('activeUsers', Object.keys(roomsUsers[room]).length);
+
       console.log(`${username} matched with ${partner.username} in room ${room}`);
+
+      [partner.socket, socket].forEach(s => {
+        s.emit('partnerFound', { room, partner: s === socket ? partner.username : username });
+      });
     } else {
       waitingQueue.push({ socket, username });
       socket.emit('waiting', 'Waiting for a partner...');
