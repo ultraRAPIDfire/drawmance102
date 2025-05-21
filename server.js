@@ -5,173 +5,162 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*' }
+  cors: { origin: '*' }
 });
 
 const port = process.env.PORT || 3000;
 
-const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
+const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
 const waitingQueue = []; // [{ socket, username }]
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('User connected:', socket.id);
 
-  let currentRoom = null;
-  let username = null;
+  // Removed: let currentRoom = null;
+  // Removed: let username = null;
+  // We will now use socket.data.username and socket.data.room
 
-  socket.on('username', (name) => {
-    username = name;
-    console.log(`Username set: ${username}`);
-  });
+  socket.on('username', (name) => {
+    socket.data.username = name; // Store username directly on socket.data
+    console.log(`Username set for ${socket.id}: ${socket.data.username}`);
+  });
 
-  socket.on('joinRoom', (room) => {
-    leaveCurrentRoom();
+  socket.on('joinRoom', (room) => {
+    // If this socket was already associated with a room, leave it first
+    if (socket.data.room && roomsUsers[socket.data.room] && socket.data.room !== room) {
+      socket.leave(socket.data.room);
+      delete roomsUsers[socket.data.room][socket.id];
+      emitActiveUsers(socket.data.room); // Update count for the room being left
+      // Clean up empty rooms
+      if (Object.keys(roomsUsers[socket.data.room]).length === 0) {
+        delete roomsUsers[socket.data.room];
+      }
+    }
 
-    currentRoom = room;
-    socket.join(room);
+    socket.data.room = room; // Store the new room on socket.data
+    socket.join(room);
 
-    if (!roomsUsers[room]) roomsUsers[room] = {};
-    roomsUsers[room][socket.id] = username || 'Anonymous';
+    if (!roomsUsers[room]) roomsUsers[room] = {};
+    roomsUsers[room][socket.id] = socket.data.username || 'Anonymous'; // Use username from socket.data
 
-    emitActiveUsers(room);
+    emitActiveUsers(room); // Update count for the room being joined
 
-    console.log(`${username || 'User'} joined room ${room}`);
+    console.log(`${socket.data.username || 'User'} joined room ${room}`);
+  });
 
-    // *** IMPORTANT: If you had persistent canvas state, you'd load it here ***
-    // For example, if you stored the last full canvas image or a list of recent strokes.
-    // Since get_stroke.php provides past strokes, you'd fetch them here and emit to the joining user.
-    // However, a 'clear all' in the past would ideally clear these too.
-    // For now, new users will see a blank canvas unless the clear command was recent.
-  });
+  socket.on('draw', (data) => {
+    if (socket.data.room) socket.to(socket.data.room).emit('draw', data);
+  });
 
-  socket.on('draw', (data) => {
-    if (currentRoom) socket.to(currentRoom).emit('draw', data);
-  });
+  // New: Handle drawText event
+  socket.on('drawText', (data) => {
+    if (socket.data.room) socket.to(socket.data.room).emit('drawText', data);
+  });
 
-  // New: Handle drawText event
-  socket.on('drawText', (data) => {
-    if (currentRoom) socket.to(currentRoom).emit('drawText', data);
-  });
+  // New: Handle clearCanvas event
+  socket.on('clearCanvas', (room) => {
+    // Note: 'room' parameter here ensures we clear the correct room's canvas,
+    // not necessarily the room the sender is currently associated with via socket.data.room,
+    // which might be null if they just disconnected.
+    if (room && roomsUsers[room]) {
+      console.log(`Clearing canvas for room: ${room}`);
+      io.to(room).emit('clearCanvas'); // Broadcast to all clients in the room
+    }
+  });
 
-  // New: Handle clearCanvas event
-  socket.on('clearCanvas', (room) => {
-    if (room && roomsUsers[room]) {
-      console.log(`Clearing canvas for room: ${room}`);
-      io.to(room).emit('clearCanvas'); // Broadcast to all clients in the room
-      // If you had persistent storage, you'd also mark the canvas as cleared in your database here.
-      // e.g., updateRoomState(room, 'cleared');
+  socket.on('chat', (data) => {
+    if (socket.data.room) io.to(socket.data.room).emit('chat', data);
+  });
+
+  socket.on('findPartner', (name) => {
+    socket.data.username = name || socket.data.username; // Ensure username is set on current socket
+    if (!socket.data.username) {
+      socket.emit('error', 'Username not set');
+      return;
+    }
+
+    // Prevent duplicate entries in waiting queue
+    if (waitingQueue.find(u => u.socket.id === socket.id)) {
+        console.log(`${socket.data.username} (ID: ${socket.id}) tried to find partner but is already in queue.`);
+        return;
     }
-  });
 
-  socket.on('chat', (data) => {
-    if (currentRoom) io.to(currentRoom).emit('chat', data);
-  });
+    const partnerEntry = waitingQueue.find(user => user.socket.id !== socket.id);
 
-  socket.on('findPartner', (name) => {
-    username = name || username;
-    if (!username) {
-      socket.emit('error', 'Username not set');
-      return;
-    }
+    if (partnerEntry) {
+      waitingQueue.splice(waitingQueue.indexOf(partnerEntry), 1); // Remove partner from queue
 
-    // Prevent duplicate entries in waiting queue
-    if (waitingQueue.find(u => u.socket.id === socket.id)) return;
+      const room = generateRoomCode();
 
-    const partner = waitingQueue.find(user => user.socket.id !== socket.id);
+      // --- CRUCIAL FIX: Update `socket.data.room` for *both* sockets before client redirect ---
+      socket.data.room = room;
+      partnerEntry.socket.data.room = room;
 
-    if (partner) {
-      waitingQueue.splice(waitingQueue.indexOf(partner), 1);
+      // Make both sockets join the new room on the server side
+      socket.join(room);
+      partnerEntry.socket.join(room);
 
-      const room = generateRoomCode();
+      if (!roomsUsers[room]) roomsUsers[room] = {};
+      roomsUsers[room][socket.id] = socket.data.username;
+      roomsUsers[room][partnerEntry.socket.id] = partnerEntry.socket.data.username || 'Anonymous';
 
-      // Make both sockets leave any old rooms & remove from roomsUsers
-      [partner.socket, socket].forEach(s => {
-        leaveAllRooms(s);
-        s.join(room);
-      });
+      emitActiveUsers(room); // Should now correctly emit 2
 
-      currentRoom = room;
+      console.log(`${socket.data.username} matched with ${partnerEntry.socket.data.username} in room ${room}`);
 
-      if (!roomsUsers[room]) roomsUsers[room] = {};
-      roomsUsers[room][socket.id] = username;
-      roomsUsers[room][partner.socket.id] = partner.username;
+      // Emit partnerFound to both clients, passing the *other* partner's username
+      socket.emit('partnerFound', { room, partner: partnerEntry.socket.data.username });
+      partnerEntry.socket.emit('partnerFound', { room, partner: socket.data.username });
+    } else {
+      waitingQueue.push({ socket: socket, username: socket.data.username }); // Store the socket and its username
+      socket.emit('waiting', 'Waiting for a partner...');
+      console.log(`${socket.data.username} is waiting for a match`);
+    }
+  });
 
-      emitActiveUsers(room);
+  socket.on('cancelMatch', () => {
+    const index = waitingQueue.findIndex(u => u.socket.id === socket.id);
+    if (index !== -1) {
+      waitingQueue.splice(index, 1);
+      console.log(`${socket.data.username || socket.id} canceled matchmaking`);
+    }
+  });
 
-      console.log(`${username} matched with ${partner.username} in room ${room}`);
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
 
-      [partner.socket, socket].forEach(s => {
-        s.emit('partnerFound', { room, partner: s === socket ? partner.username : username });
-      });
-    } else {
-      waitingQueue.push({ socket, username });
-      socket.emit('waiting', 'Waiting for a partner...');
-      console.log(`${username} is waiting for a match`);
-    }
-  });
+    // Remove from waiting queue
+    const index = waitingQueue.findIndex(u => u.socket.id === socket.id);
+    if (index !== -1) waitingQueue.splice(index, 1);
 
-  socket.on('cancelMatch', () => {
-    const index = waitingQueue.findIndex(u => u.socket.id === socket.id);
-    if (index !== -1) {
-      waitingQueue.splice(index, 1);
-      console.log(`${username || socket.id} canceled matchmaking`);
-    }
-  });
+    // Clean up from roomsUsers if they were in a room using socket.data.room
+    if (socket.data.room && roomsUsers[socket.data.room]) {
+      delete roomsUsers[socket.data.room][socket.id];
+      emitActiveUsers(socket.data.room); // Update count for the room that user left
+      // Clean up empty rooms
+      if (Object.keys(roomsUsers[socket.data.room]).length === 0) {
+        delete roomsUsers[socket.data.room];
+      }
+    }
+  });
 
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+  // Helper functions
+  // Removed: leaveCurrentRoom() and leaveAllRooms() as their logic is integrated.
 
-    // Remove from waiting queue
-    const index = waitingQueue.findIndex(u => u.socket.id === socket.id);
-    if (index !== -1) waitingQueue.splice(index, 1);
+  function emitActiveUsers(room) {
+    const count = roomsUsers[room] ? Object.keys(roomsUsers[room]).length : 0;
+    console.log(`Room ${room} active users: ${count}`);
+    io.to(room).emit('activeUsers', count);
+  }
 
-    leaveCurrentRoom();
-  });
-
-  // Helper functions
-  function leaveCurrentRoom() {
-    if (currentRoom) {
-      socket.leave(currentRoom);
-      if (roomsUsers[currentRoom]) {
-        delete roomsUsers[currentRoom][socket.id];
-        emitActiveUsers(currentRoom);
-        // Clean up empty rooms
-        if (Object.keys(roomsUsers[currentRoom]).length === 0) {
-          delete roomsUsers[currentRoom];
-        }
-      }
-      currentRoom = null;
-    }
-  }
-
-  function leaveAllRooms(s) {
-    const rooms = Object.keys(roomsUsers);
-    rooms.forEach(room => {
-      if (roomsUsers[room] && roomsUsers[room][s.id]) {
-        s.leave(room);
-        delete roomsUsers[room][s.id];
-        emitActiveUsers(room);
-        if (Object.keys(roomsUsers[room]).length === 0) {
-          delete roomsUsers[room];
-        }
-      }
-    });
-  }
-
-  function emitActiveUsers(room) {
-    const count = roomsUsers[room] ? Object.keys(roomsUsers[room]).length : 0;
-    console.log(`Room ${room} active users: ${count}`);
-    io.to(room).emit('activeUsers', count);
-  }
-
-  function generateRoomCode() {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let code = '';
-    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-    return code;
-  }
+  function generateRoomCode() {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let code = '';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
 });
 
 server.listen(port, () => {
-  console.log(`Socket.IO server running on port ${port}`);
+  console.log(`Socket.IO server running on port ${port}`);
 });
