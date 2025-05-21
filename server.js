@@ -59,12 +59,13 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Prevent duplicate in queue
+    // Prevent duplicate entries in waiting queue
     if (waitingQueue.find(u => u.socket.id === socket.id)) return;
 
     const partner = waitingQueue.find(user => user.socket.id !== socket.id);
 
     if (partner) {
+      // Remove matched partner from waiting queue
       waitingQueue.splice(waitingQueue.indexOf(partner), 1);
 
       const room = generateRoomCode();
@@ -85,6 +86,14 @@ io.on('connection', (socket) => {
       waitingQueue.push({ socket, username });
       socket.emit('waiting', 'Waiting for a partner...');
       console.log(`${username} is waiting for a match`);
+    }
+  });
+
+  socket.on('cancelMatch', () => {
+    const index = waitingQueue.findIndex(u => u.socket.id === socket.id);
+    if (index !== -1) {
+      waitingQueue.splice(index, 1);
+      console.log(`${username || socket.id} canceled matchmaking`);
     }
   });
 
