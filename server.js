@@ -47,7 +47,8 @@ io.on('connection', (socket) => {
 
   socket.on('draw', (data) => {
     if (socket.data.room) {
-      socket.to(socket.data.room).emit('draw', data);
+      // MODIFICATION: Change socket.to to io.to to broadcast to all clients in the room, including the sender
+      io.to(socket.data.room).emit('draw', data);
 
       // ✅ Save draw to room history
       if (!roomsHistory[socket.data.room]) roomsHistory[socket.data.room] = [];
@@ -66,7 +67,8 @@ io.on('connection', (socket) => {
 
   socket.on('drawText', (data) => {
     if (socket.data.room) {
-      socket.to(socket.data.room).emit('drawText', data);
+      // MODIFICATION: Change socket.to to io.to to broadcast to all clients in the room, including the sender
+      io.to(socket.data.room).emit('drawText', data);
 
       // ✅ Save text to room history
       if (!roomsHistory[socket.data.room]) roomsHistory[socket.data.room] = [];
