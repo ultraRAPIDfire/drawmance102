@@ -1,7 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const roomsHistory = {}; // ✅ Add this to store canvas history per room
+const roomsHistory = {}; // This will now store full command objects per room
 
 const app = express();
 const server = http.createServer(app);
@@ -42,54 +42,53 @@ io.on('connection', (socket) => {
 
     console.log(`${socket.data.username || 'User'} joined room ${room}`);
 
+    // Send the complete history for this room when a user joins
     socket.emit('initializeCanvas', roomsHistory[room] || []);
   });
 
-  socket.on('draw', (data) => {
-    if (socket.data.room) {
-      // MODIFICATION: Change socket.to to io.to to broadcast to all clients in the room, including the sender
-      io.to(socket.data.room).emit('draw', data);
+  // NEW: Handler for receiving complete drawing or text commands
+  socket.on('sendDrawingCommand', (data) => {
+    if (socket.data.room && data.command) {
+      console.log(`Received drawing command for room ${socket.data.room}:`, data.command.type);
 
-      // ✅ Save draw to room history
-      if (!roomsHistory[socket.data.room]) roomsHistory[socket.data.room] = [];
-      roomsHistory[socket.data.room].push({
-        type: 'line',
-        x1: data.x1,
-        y1: data.y1,
-        x2: data.x2,
-        y2: data.y2,
-        color: data.color,
-        size: data.size,
-        tool: data.tool,
-      });
+      // Initialize history for the room if it doesn't exist
+      if (!roomsHistory[socket.data.room]) {
+        roomsHistory[socket.data.room] = [];
+      }
+
+      // Add the complete command object to the room's history
+      roomsHistory[socket.data.room].push(data.command);
+
+      // Broadcast the complete command to all clients in the room
+      // This includes the sender, so the sender's client can ignore if needed.
+      io.to(socket.data.room).emit('receiveDrawingCommand', data.command);
     }
   });
 
-  socket.on('drawText', (data) => {
-    if (socket.data.room) {
-      // MODIFICATION: Change socket.to to io.to to broadcast to all clients in the room, including the sender
-      io.to(socket.data.room).emit('drawText', data);
-
-      // ✅ Save text to room history
-      if (!roomsHistory[socket.data.room]) roomsHistory[socket.data.room] = [];
-      roomsHistory[socket.data.room].push({
-        type: 'text',
-        text: data.text,
-        x: data.x,
-        y: data.y,
-        color: data.color,
-        size: data.size,
-      });
-    }
-  });
+  // REMOVED: Old 'draw' and 'drawText' handlers as they are replaced by 'sendDrawingCommand'
 
   socket.on('clearCanvas', (room) => {
     if (room && roomsUsers[room]) {
       console.log(`Clearing canvas for room: ${room}`);
       io.to(room).emit('clearCanvas');
 
-      // ✅ Clear history too
+      // Clear history for this room
       roomsHistory[room] = [];
+    }
+  });
+
+  socket.on('undoCommand', (room) => { // Renamed from 'undo'
+    if (room && roomsHistory[room] && roomsHistory[room].length > 0) {
+      // For simplicity, we just broadcast to undo the last action on the client
+      // A more robust undo would involve sending a specific undo state or index
+      io.to(room).emit('undoCommand');
+    }
+  });
+
+  socket.on('redoCommand', (room) => { // Renamed from 'redo'
+    if (room && roomsHistory[room] && roomsHistory[room].length > 0) {
+      // Similar to undo, broadcast to redo the next action on the client
+      io.to(room).emit('redoCommand');
     }
   });
 
@@ -165,7 +164,7 @@ io.on('connection', (socket) => {
   function emitActiveUsers(room) {
     const count = roomsUsers[room] ? Object.keys(roomsUsers[room]).length : 0;
     console.log(`Room ${room} active users: ${count}`);
-    io.to(room).emit('activeUsers', count);
+    io.to(room).emit('updateUsers', count); // Changed 'activeUsers' to 'updateUsers' to match client
   }
 
   function generateRoomCode() {
