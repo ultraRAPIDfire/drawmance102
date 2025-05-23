@@ -42,6 +42,8 @@ io.on('connection', (socket) => {
     emitActiveUsers(room); // Update count for the room being joined
 
     console.log(`${socket.data.username || 'User'} joined room ${room}`);
+
+    socket.emit('initializeCanvas', roomsHistory[room] || []);
   });
 
   socket.on('draw', (data) => {
