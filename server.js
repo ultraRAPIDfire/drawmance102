@@ -11,7 +11,7 @@ const io = new Server(server, {
 
 const port = process.env.PORT || 3000;
 
-const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
+const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
 const waitingQueue = []; // [{ socket, username }]
 
 io.on('connection', (socket) => {
@@ -51,6 +51,11 @@ io.on('connection', (socket) => {
     if (socket.data.room && data.command) {
       console.log(`Received drawing command for room ${socket.data.room}:`, data.command.type);
 
+      // --- START OF REQUIRED CHANGE ---
+      // Add sender's socket ID to the command
+      data.command.senderSocketId = socket.id;
+      // --- END OF REQUIRED CHANGE ---
+
       // Initialize history for the room if it doesn't exist
       if (!roomsHistory[socket.data.room]) {
         roomsHistory[socket.data.room] = [];
@@ -64,8 +69,6 @@ io.on('connection', (socket) => {
       io.to(socket.data.room).emit('receiveDrawingCommand', data.command);
     }
   });
-
-  // REMOVED: Old 'draw' and 'drawText' handlers as they are replaced by 'sendDrawingCommand'
 
   socket.on('clearCanvas', (room) => {
     if (room && roomsUsers[room]) {
