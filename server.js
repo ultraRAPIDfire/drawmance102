@@ -11,7 +11,7 @@ const io = new Server(server, {
 
 const port = process.env.PORT || 3000;
 
-const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
+const roomsUsers = {};  // { roomCode: { socketId: username, ... } }
 const waitingQueue = []; // [{ socket, username }]
 
 io.on('connection', (socket) => {
@@ -51,10 +51,9 @@ io.on('connection', (socket) => {
     if (socket.data.room && data.command) {
       console.log(`Received drawing command for room ${socket.data.room}:`, data.command.type);
 
-      // --- START OF REQUIRED CHANGE ---
-      // Add sender's socket ID to the command
+      // Add sender's socket ID to the command (already present in your code)
+      // This is useful for the client to distinguish its own commands
       data.command.senderSocketId = socket.id;
-      // --- END OF REQUIRED CHANGE ---
 
       // Initialize history for the room if it doesn't exist
       if (!roomsHistory[socket.data.room]) {
@@ -65,10 +64,28 @@ io.on('connection', (socket) => {
       roomsHistory[socket.data.room].push(data.command);
 
       // Broadcast the complete command to all clients in the room
-      // This includes the sender, so the sender's client can ignore if needed.
       io.to(socket.data.room).emit('receiveDrawingCommand', data.command);
     }
   });
+
+  // *** THIS IS THE NEW IMPORTANT ADDITION FOR REAL-TIME DRAWING ***
+  socket.on('sendPartialDrawing', (data) => {
+    if (socket.data.room && data.point1 && data.point2) {
+      // Broadcast the partial command to all other clients in the room
+      // This allows other clients to see the drawing in real-time as it's being made.
+      // Use socket.to() to send to everyone EXCEPT the sender.
+      socket.to(socket.data.room).emit('receivePartialDrawing', {
+        point1: data.point1,
+        point2: data.point2,
+        color: data.color,
+        size: data.size,
+        tool: data.tool,
+        username: socket.data.username, // Include username for client-side distinction
+        isStart: data.isStart // Pass along the 'isStart' flag
+      });
+    }
+  });
+  // ******************************************************************
 
   socket.on('clearCanvas', (room) => {
     if (room && roomsUsers[room]) {
@@ -80,15 +97,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('undoCommand', (room) => { // Renamed from 'undo'
+  socket.on('undoCommand', (room) => {
     if (room && roomsHistory[room] && roomsHistory[room].length > 0) {
-      // For simplicity, we just broadcast to undo the last action on the client
-      // A more robust undo would involve sending a specific undo state or index
+      // In a real application, you'd manage the history state more robustly on the server
+      // For this setup, we simply broadcast the undo action.
+      // A more robust undo would involve sending a specific history state or index
+      // and managing it on the server (e.g., removing the last command from roomsHistory[room])
+      // However, given the current client-side undo logic, this broadcast is sufficient.
       io.to(room).emit('undoCommand');
     }
   });
 
-  socket.on('redoCommand', (room) => { // Renamed from 'redo'
+  socket.on('redoCommand', (room) => {
     if (room && roomsHistory[room] && roomsHistory[room].length > 0) {
       // Similar to undo, broadcast to redo the next action on the client
       io.to(room).emit('redoCommand');
