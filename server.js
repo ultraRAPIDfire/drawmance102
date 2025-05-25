@@ -16,9 +16,9 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 // In-memory data
-const roomsUsers = {};         // { roomCode: { socketId: username } }
-const roomsHistory = {};       // { roomCode: [command1, command2, ...] }
-const waitingQueue = [];       // [{ socket, username }]
+const roomsUsers = {};          // { roomCode: { socketId: username } }
+const roomsHistory = {};      // { roomCode: [command1, command2, ...] }
+const waitingQueue = [];      // [{ socket, username }]
 
 // Health check route (optional)
 app.get('/health', (_, res) => res.send('OK'));
@@ -169,13 +169,12 @@ io.on('connection', (socket) => {
   });
 
   // Undo (Note: Server-side undo/redo logic needs to manage history index accurately)
+  // This existing handler was broadcasting 'undoCommand' and 'redoCommand' which are not used by the client.
+  // It is now replaced by the 'historyChange' handler below.
+  /*
   socket.on('undoCommand', () => {
     const room = socket.data.room;
     if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
-
-    // This is a simple broadcast. A more robust undo/redo would involve
-    // the server managing the history index and sending the state.
-    // For now, it relies on client-side history management for undo/redo.
     io.to(room).emit('undoCommand');
   });
 
@@ -183,28 +182,28 @@ io.on('connection', (socket) => {
   socket.on('redoCommand', () => {
     const room = socket.data.room;
     if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
-
-    // Similar to undo, this relies on client-side history management.
     io.to(room).emit('redoCommand');
   });
+  */
 
-  // Handle full history updates (e.g., after cut/delete or initial sync)
+  // Handle full history updates (e.g., after cut/delete, initial sync, and now undo/redo)
+  // This listener now correctly broadcasts the 'historyChange' event as expected by the client.
   socket.on('historyChange', (data) => {
     const room = socket.data.room;
-    if (!room || !data.history) return;
+    const { history, index, username, senderSocketId } = data; // Destructure senderSocketId
+    if (!room || !history) return;
 
-    // Server updates its history with the received history
-    // This assumes the client sending 'historyChange' has the most authoritative history.
-    // In a highly concurrent system, this might need more sophisticated merging/conflict resolution.
-    roomsHistory[room] = data.history;
+    // Update the server's authoritative history with the received history
+    // This is crucial for maintaining a consistent state across all clients.
+    roomsHistory[room] = history;
 
-    // Broadcast the updated history to all others in the room
-    socket.to(room).emit('updateHistory', {
-      history: roomsHistory[room],
-      index: data.index,
-      username: data.username
-    });
-    console.log(`SERVER: History changed for room ${room} by ${data.username}.`);
+    console.log(`Server: Received historyChange from ${username} (socket: ${senderSocketId}) in room ${room}. New history length: ${history.length}, index: ${index}`);
+
+    // Broadcast the history change to all clients in the room, EXCEPT the sender.
+    // This ensures that other users' canvases are updated, but the sender's canvas
+    // (which already updated locally) doesn't receive a redundant update.
+    socket.to(room).emit('historyChange', { history, index, username, senderSocketId });
+    console.log(`Server: Broadcasted historyChange to room ${room} (excluding sender ${senderSocketId}).`);
   });
 
 
