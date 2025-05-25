@@ -213,6 +213,9 @@ io.on('connection', (socket) => {
     const room = socket.data.room;
     if (!room) return;
 
+    // ADDED: Log the received chat message on the server
+    console.log(`SERVER: Chat message received from ${data.username} in room ${room}: "${data.message}"`);
+
     io.to(room).emit('message', data);
   });
 
