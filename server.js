@@ -133,6 +133,15 @@ io.on('connection', (socket) => {
     io.to(room).emit('message', data);
   });
 
+  socket.on('moveCommand', (data) => {
+    const room = socket.data.room;
+    if (!room || !data.movedCommands) return;
+  
+    // Broadcast the moved commands to all *other* users in the room
+    socket.to(room).emit('remoteMoveCommand', data.movedCommands);
+  });
+  
+
   // Quick Match (Find Partner)
   socket.on('findPartner', (name) => {
     socket.data.username = name || socket.data.username || 'Anonymous';
