@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 
 const roomsUsers = {};
 const roomsHistory = {};
-const waitingQueue = [];
+const waitingQueue = {};
 
 app.get('/health', (_, res) => res.send('OK'));
 
