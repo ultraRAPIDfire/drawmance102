@@ -16,9 +16,9 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 // In-memory data
-const roomsUsers = {};          // { roomCode: { socketId: username } }
-const roomsHistory = {};        // { roomCode: [command1, command2, ...] }
-const waitingQueue = [];        // [{ socket, username }]
+const roomsUsers = {};         // { roomCode: { socketId: username } }
+const roomsHistory = {};       // { roomCode: [command1, command2, ...] }
+const waitingQueue = [];       // [{ socket, username }]
 
 // Health check route (optional)
 app.get('/health', (_, res) => res.send('OK'));
@@ -99,6 +99,43 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Handle live movement of selected elements (during drag)
+  socket.on('moveCommand', (data) => {
+    const room = socket.data.room;
+    if (!room || !data.movedCommands) return;
+    // Broadcast the moved commands to all *other* users in the room for live visual updates
+    socket.to(room).emit('remoteMoveCommand', data.movedCommands);
+  });
+
+  // Handle final position update of selected elements (after drag ends)
+  socket.on('sendFinalMove', (data) => {
+    const room = socket.data.room;
+    if (!room || !data.finalMovedCommands || !roomsHistory[room]) return;
+
+    // Update the server's canonical history with the final positions
+    data.finalMovedCommands.forEach(finalCmd => {
+      const index = roomsHistory[room].findIndex(cmd => cmd.id === finalCmd.id);
+      if (index !== -1) {
+        // Replace the old command with the new, moved command
+        roomsHistory[room][index] = finalCmd;
+      } else {
+        // This case should ideally not happen if IDs are unique and elements exist.
+        // It might indicate a new element was added during drag (unlikely for move).
+        console.warn(`SERVER: sendFinalMove received command with ID ${finalCmd.id} not found in history. Adding as new.`);
+        roomsHistory[room].push(finalCmd);
+      }
+    });
+
+    // Broadcast the updated full history to all clients to ensure consistency
+    // This will trigger the client's 'updateHistory' listener, which handles deduplication.
+    io.to(room).emit('updateHistory', {
+      history: roomsHistory[room],
+      index: roomsHistory[room].length - 1,
+      username: socket.data.username // Indicate who initiated the update
+    });
+    console.log(`SERVER: Final move committed for room ${room}. History updated.`);
+  });
+
   // Clear canvas
   socket.on('clearCanvas', () => {
     const room = socket.data.room;
@@ -109,21 +146,45 @@ io.on('connection', (socket) => {
     console.log(`Canvas cleared for room ${room}`);
   });
 
-  // Undo
+  // Undo (Note: Server-side undo/redo logic needs to manage history index accurately)
   socket.on('undoCommand', () => {
     const room = socket.data.room;
     if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
 
+    // This is a simple broadcast. A more robust undo/redo would involve
+    // the server managing the history index and sending the state.
+    // For now, it relies on client-side history management for undo/redo.
     io.to(room).emit('undoCommand');
   });
 
-  // Redo
+  // Redo (Note: Server-side undo/redo logic needs to manage history index accurately)
   socket.on('redoCommand', () => {
     const room = socket.data.room;
     if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
 
+    // Similar to undo, this relies on client-side history management.
     io.to(room).emit('redoCommand');
   });
+
+  // Handle full history updates (e.g., after cut/delete or initial sync)
+  socket.on('historyChange', (data) => {
+    const room = socket.data.room;
+    if (!room || !data.history) return;
+
+    // Server updates its history with the received history
+    // This assumes the client sending 'historyChange' has the most authoritative history.
+    // In a highly concurrent system, this might need more sophisticated merging/conflict resolution.
+    roomsHistory[room] = data.history;
+
+    // Broadcast the updated history to all others in the room
+    socket.to(room).emit('updateHistory', {
+      history: roomsHistory[room],
+      index: data.index,
+      username: data.username
+    });
+    console.log(`SERVER: History changed for room ${room} by ${data.username}.`);
+  });
+
 
   // Chat message
   socket.on('chatMessage', (data) => {
@@ -132,15 +193,6 @@ io.on('connection', (socket) => {
 
     io.to(room).emit('message', data);
   });
-
-  socket.on('moveCommand', (data) => {
-    const room = socket.data.room;
-    if (!room || !data.movedCommands) return;
-  
-    // Broadcast the moved commands to all *other* users in the room
-    socket.to(room).emit('remoteMoveCommand', data.movedCommands);
-  });
-  
 
   // Quick Match (Find Partner)
   socket.on('findPartner', (name) => {
