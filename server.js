@@ -104,7 +104,10 @@ io.on('connection', (socket) => {
     const room = socket.data.room;
     if (!room || !data.movedCommands) return;
     // Broadcast the moved commands to all *other* users in the room for live visual updates
-    socket.to(room).emit('remoteMoveCommand', data.movedCommands);
+    socket.to(room).emit('remoteMoveCommand', {
+        movedCommands: data.movedCommands,
+        username: socket.data.username // <--- ADDED THIS LINE
+    });
   });
 
   // Handle final position update of selected elements (after drag ends)
