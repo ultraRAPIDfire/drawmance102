@@ -80,7 +80,9 @@ io.on('connection', (socket) => {
     if (!roomsHistory[room]) roomsHistory[room] = [];
     roomsHistory[room].push(data.command);
 
-    io.to(room).emit('receiveDrawingCommand', data.command);
+    socket.to(room).emit('receiveDrawingCommand', data.command);
+
+    console.log(`SERVER: Drawing command received and broadcasted in room ${room} from ${socket.data.username}. Command type: ${data.command.type}.`);
   });
 
   // Real-time partial drawing (for smooth live strokes)
@@ -168,25 +170,6 @@ io.on('connection', (socket) => {
     console.log(`Canvas cleared for room ${room}`);
   });
 
-  // Undo (Note: Server-side undo/redo logic needs to manage history index accurately)
-  // This existing handler was broadcasting 'undoCommand' and 'redoCommand' which are not used by the client.
-  // It is now replaced by the 'historyChange' handler below.
-  /*
-  socket.on('undoCommand', () => {
-    const room = socket.data.room;
-    if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
-    io.to(room).emit('undoCommand');
-  });
-
-  // Redo (Note: Server-side undo/redo logic needs to manage history index accurately)
-  socket.on('redoCommand', () => {
-    const room = socket.data.room;
-    if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
-    io.to(room).emit('redoCommand');
-  });
-  */
-
-  // Handle full history updates (e.g., after cut/delete, initial sync, and now undo/redo)
   // This listener now correctly broadcasts the 'historyChange' event as expected by the client.
   socket.on('historyChange', (data) => {
     const room = socket.data.room;
