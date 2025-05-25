@@ -99,18 +99,34 @@ io.on('connection', (socket) => {
     });
   });
 
+  // ADDED: Handle the end of a live drawing stroke from a client
+  socket.on('liveDrawingEnd', (data) => {
+    const room = socket.data.room;
+    if (!room) return;
+
+    // Broadcast this event to all other clients in the room
+    // This tells them to stop drawing the live stroke for this user
+    socket.to(room).emit('liveDrawingEnd', {
+      room: room,
+      username: socket.data.username // Indicate which user finished drawing
+    });
+    console.log(`SERVER: liveDrawingEnd received from ${socket.data.username} in room ${room}. Broadcasting.`);
+  });
+
   // Handle live movement of selected elements (during drag)
+  // NOTE: This event will no longer be sent by the client since the selection tool was removed.
   socket.on('moveCommand', (data) => {
     const room = socket.data.room;
     if (!room || !data.movedCommands) return;
     // Broadcast the moved commands to all *other* users in the room for live visual updates
     socket.to(room).emit('remoteMoveCommand', {
         movedCommands: data.movedCommands,
-        username: socket.data.username // <--- ADDED THIS LINE
+        username: socket.data.username
     });
   });
 
   // Handle final position update of selected elements (after drag ends)
+  // NOTE: This event will no longer be sent by the client since the selection tool was removed.
   socket.on('sendFinalMove', (data) => {
     const room = socket.data.room;
     if (!room || !data.finalMovedCommands || !roomsHistory[room]) return;
