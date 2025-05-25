@@ -15,34 +15,24 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// In-memory data
-const roomsUsers = {};          // { roomCode: { socketId: username } }
-const roomsHistory = {};        // { roomCode: [command1, command2, ...] }
-const waitingQueue = [];        // [{ socket, username }]
+const roomsUsers = {};
+const roomsHistory = {};
+const waitingQueue = [];
 
-// Health check route (optional)
 app.get('/health', (_, res) => res.send('OK'));
 
-// Socket.IO connection handler
 io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
 
-  // Store username
   socket.on('username', (name) => {
     socket.data.username = name || 'Anonymous';
   });
 
-  // Join a room
   socket.on('joinRoom', (room) => {
-    // --- START OF FIXES FOR 'undefined joined room [object Object]' ---
-    // 1. Validate the 'room' parameter: Ensure it's a non-empty string.
     if (typeof room !== 'string' || room.trim() === '') {
-        console.error(`SERVER ERROR: joinRoom received invalid room (not a string or empty):`, room, `from socket: ${socket.id}`);
-        // Consider sending an error back to the client if needed:
-        // socket.emit('joinRoomError', 'Invalid room code provided.');
-        return; // Stop processing if the room is invalid
+        console.error(`SERVER ERROR: joinRoom received invalid room:`, room, `from socket: ${socket.id}`);
+        return;
     }
-    // --- END OF FIXES ---
 
     const previousRoom = socket.data.room;
 
@@ -59,114 +49,96 @@ io.on('connection', (socket) => {
     socket.data.room = room;
     socket.join(room);
 
-    if (!roomsUsers[room]) roomsUsers[room] = {};
+    if (!roomsUsers[room]) {
+      roomsUsers[room] = {};
+    }
     roomsUsers[room][socket.id] = socket.data.username;
 
     emitUserCount(room);
-    // --- START OF FIXES ---
-    // 2. Make the username logging more robust
-    console.log(`${socket.data.username || 'Unknown User'} joined room ${room}`);
-    // --- END OF FIXES ---
+    console.log(`${socket.data.username || socket.id} joined room: ${room}`);
 
-    socket.emit('initializeCanvas', roomsHistory[room] || []);
+    if (roomsHistory[room]) {
+      socket.emit('drawingHistory', { history: roomsHistory[room], index: roomsHistory[room].length - 1 });
+    } else {
+      roomsHistory[room] = [];
+    }
   });
 
-  // Full drawing command (on mouse up or text insert)
-  socket.on('sendDrawingCommand', (data) => {
+  socket.on('sendDrawingCommand', (command) => {
     const room = socket.data.room;
-    if (!room || !data.command) return;
+    if (!room || !roomsHistory[room]) return;
 
-    data.command.senderSocketId = socket.id;
-    if (!roomsHistory[room]) roomsHistory[room] = [];
-    roomsHistory[room].push(data.command);
+    roomsHistory[room].push(command);
 
-    io.to(room).emit('receiveDrawingCommand', data.command);
+    socket.broadcast.to(room).emit('receiveDrawingCommand', { command, username: socket.data.username });
   });
 
-  // Real-time partial drawing (for smooth live strokes)
-  socket.on('sendPartialDrawing', (data) => {
+  socket.on('moveCommand', (movedCommands) => {
     const room = socket.data.room;
-    if (!room || !data.point1 || !data.point2) return;
+    if (!room || !roomsHistory[room]) return;
 
-    socket.to(room).emit('receivePartialDrawing', {
-      point1: data.point1,
-      point2: data.point2,
-      color: data.color,
-      size: data.size,
-      tool: data.tool,
-      username: socket.data.username,
-      isStart: data.isStart
+    movedCommands.forEach(movedCmd => {
+      const index = roomsHistory[room].findIndex(cmd => cmd.id === movedCmd.id);
+      if (index !== -1) {
+        roomsHistory[room][index] = movedCmd;
+      }
     });
+
+    socket.broadcast.to(room).emit('remoteMoveCommand', movedCommands);
   });
 
-  // Clear canvas
   socket.on('clearCanvas', () => {
     const room = socket.data.room;
     if (!room) return;
-
     roomsHistory[room] = [];
     io.to(room).emit('clearCanvas');
     console.log(`Canvas cleared for room ${room}`);
   });
 
-  // Undo
   socket.on('undoCommand', () => {
     const room = socket.data.room;
     if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
 
-    io.to(room).emit('undoCommand');
+    roomsHistory[room].pop();
+
+    io.to(room).emit('updateHistory', { history: roomsHistory[room], index: roomsHistory[room].length - 1 });
   });
 
-  // Redo
   socket.on('redoCommand', () => {
     const room = socket.data.room;
-    if (!room || !roomsHistory[room] || roomsHistory[room].length === 0) return;
+    if (!room || !roomsHistory[room]) return;
 
     io.to(room).emit('redoCommand');
   });
 
-  // Chat message
-  socket.on('chatMessage', (data) => {
+  socket.on('chatMessage', (message) => {
     const room = socket.data.room;
-    if (!room) return;
-
-    io.to(room).emit('message', data);
+    const username = socket.data.username;
+    if (room && message.trim() !== '') {
+      io.to(room).emit('message', { username, text: message, timestamp: new Date().toLocaleTimeString() });
+    }
   });
 
-  socket.on('moveCommand', (data) => {
-    const room = socket.data.room;
-    if (!room || !data.movedCommands) return;
-  
-    // Broadcast the moved commands to all *other* users in the room
-    socket.to(room).emit('remoteMoveCommand', data.movedCommands);
-  });
-  
+  socket.on('findPartner', () => {
+    if (waitingQueue.length > 0) {
+      const partner = waitingQueue.shift();
+      const room = `ROOM_${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
-  // Quick Match (Find Partner)
-  socket.on('findPartner', (name) => {
-    socket.data.username = name || socket.data.username || 'Anonymous';
-
-    if (waitingQueue.find(u => u.socket.id === socket.id)) return;
-
-    const partner = waitingQueue.find(u => u.socket.id !== socket.id);
-    if (partner) {
-      waitingQueue.splice(waitingQueue.indexOf(partner), 1);
-
-      const room = generateRoomCode();
-      socket.data.room = room;
-      partner.socket.data.room = room;
-
-      socket.join(room);
       partner.socket.join(room);
+      socket.join(room);
 
-      if (!roomsUsers[room]) roomsUsers[room] = {};
-      roomsUsers[room][socket.id] = socket.data.username;
-      roomsUsers[room][partner.socket.id] = partner.username;
+      partner.socket.data.room = room;
+      socket.data.room = room;
 
+      partner.socket.emit('partnerFound', room);
+      socket.emit('partnerFound', room);
+
+      roomsUsers[room] = {
+        [partner.socket.id]: partner.socket.data.username,
+        [socket.id]: socket.data.username
+      };
+      roomsHistory[room] = [];
       emitUserCount(room);
-
-      socket.emit('partnerFound', { room, partner: partner.username });
-      partner.socket.emit('partnerFound', { room, partner: socket.data.username });
     } else {
       waitingQueue.push({ socket, username: socket.data.username });
       socket.emit('waiting', 'Waiting for a partner...');
@@ -203,18 +175,8 @@ io.on('connection', (socket) => {
     const count = roomsUsers[room] ? Object.keys(roomsUsers[room]).length : 0;
     io.to(room).emit('updateUsers', count);
   }
-
-  function generateRoomCode() {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return code;
-  }
 });
 
-// Start the server
 server.listen(PORT, () => {
-  console.log(`✅ Drawmance server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
