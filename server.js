@@ -16,9 +16,9 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 // In-memory data
-const roomsUsers = {};        // { roomCode: { socketId: username } }
-const roomsHistory = {};      // { roomCode: [command1, command2, ...] }
-const waitingQueue = [];      // [{ socket, username }]
+const roomsUsers = {};          // { roomCode: { socketId: username } }
+const roomsHistory = {};        // { roomCode: [command1, command2, ...] }
+const waitingQueue = [];        // [{ socket, username }]
 
 // Health check route (optional)
 app.get('/health', (_, res) => res.send('OK'));
@@ -34,6 +34,16 @@ io.on('connection', (socket) => {
 
   // Join a room
   socket.on('joinRoom', (room) => {
+    // --- START OF FIXES FOR 'undefined joined room [object Object]' ---
+    // 1. Validate the 'room' parameter: Ensure it's a non-empty string.
+    if (typeof room !== 'string' || room.trim() === '') {
+        console.error(`SERVER ERROR: joinRoom received invalid room (not a string or empty):`, room, `from socket: ${socket.id}`);
+        // Consider sending an error back to the client if needed:
+        // socket.emit('joinRoomError', 'Invalid room code provided.');
+        return; // Stop processing if the room is invalid
+    }
+    // --- END OF FIXES ---
+
     const previousRoom = socket.data.room;
 
     if (previousRoom && roomsUsers[previousRoom]) {
@@ -53,7 +63,10 @@ io.on('connection', (socket) => {
     roomsUsers[room][socket.id] = socket.data.username;
 
     emitUserCount(room);
-    console.log(`${socket.data.username} joined room ${room}`);
+    // --- START OF FIXES ---
+    // 2. Make the username logging more robust
+    console.log(`${socket.data.username || 'Unknown User'} joined room ${room}`);
+    // --- END OF FIXES ---
 
     socket.emit('initializeCanvas', roomsHistory[room] || []);
   });
@@ -155,7 +168,7 @@ io.on('connection', (socket) => {
     const index = waitingQueue.findIndex(u => u.socket.id === socket.id);
     if (index !== -1) {
       waitingQueue.splice(index, 1);
-      console.log(`${socket.data.username} canceled matchmaking`);
+      console.log(`${socket.data.username || socket.id} canceled matchmaking`);
     }
   });
 
